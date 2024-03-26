@@ -1,0 +1,726 @@
+---
+title: "Exploratory Analysis of the ATXN2 edata"
+author: "Diksha Jethnani and Jinko Graham"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Read in excel data 
+
+We'll use the `readxl` tidyverse package to read in Joanna's excel data sheets.
+
+The `excel_sheets()` function allows users to identify the sheets in excel files. To make plots, we use the ggplot2 library. Going further, we will also use the dplyr package in R to group and understand our data and perform smooth exploratory analysis.
+We will first import all the necessary packages that we might need during our analysis.
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(stringr)
+library(RColorBrewer)
+library(stats)
+library(tidyr)
+library(reshape2)
+library(lubridate)
+library(dplyr)
+```
+
+Let's start by looking at Joanna's `ATXN2persons.xlsx` excel file and see the different sheets that we have in the `ATXN2persons.xlsx` data file.
+
+```{r}
+excel_sheets("../ATXN2persons.xlsx")           
+```
+The name of the sheet with the data is `Data`, so let's read it into R.
+
+```{r}
+persons<-read_excel("../ATXN2persons.xlsx", sheet="Data")
+head(persons)
+```
+
+We notice that we have a data frame with 15 variables.The 358 observations correspond to the total number of samples that we have. We will now make a few modifications to our data frame under the pre processing step to facilitate our further analysis.
+As we will be using the SKAT package (SNP-Set(Sequence) Kernel Association Test) for our analysis,it is important to reshape our data as per the package requirements.
+
+```{r}
+persons$ND <- factor(persons$ND, levels = c(1, 0, 3), labels = c("Yes", "No", "Maybe"))
+categorical_vars <- subset(persons, select = c("SampleIndex", "Sex", "ND", "Clinical information", "Enrichment kits"))
+```
+# 2. Adding new column to our data frame-
+
+Here, we add a new column to our data frame. This new column tells us if a person has a variant or not. The entries in the column are "yes" or "no" respectively where "yes" signifies that the person has a variant and "no" tells us that the person has none of the variants present.
+
+```{r}
+# Update the "Variant" column based on conditions
+persons$Variant <- ifelse(persons$`ATXN2ex1 variant1` == "neg" & persons$`ATXN2ex1 variant2` == "neg" , "no", "yes")
+head(persons)
+```
+We will add another column to our data frame, this column tells us the number of variants that person has i.e. 0/1/2.
+
+```{r}
+# Create the "Total_variants" column
+persons$Total_Variants <- ifelse(persons$`ATXN2ex1 variant1` == "neg" & persons$`ATXN2ex1 variant2` == "neg" ,0, ifelse(persons$`ATXN2ex1 variant1` == "neg" | persons$`ATXN2ex1 variant2`== "neg", 1, 2))
+```
+
+We will now add another column to our data frame. For our new column, we will calculate the AGE of each person in order to help us in our further analysis where we might want to test if there is any association in the type of disease with respect to the age of the person. 
+
+To calculate the age of the person, we will use the date of birth of every person along with the date on which the person was sampled. This will give us the estimate of their age as to when the sample was taken. We can now have the entries for the new column in our data frame specifying the age of each person.
+
+This would be very beneficial for us in order to relate the different characteristics of the person and see if their age acts as a factor in determining the type of disease they suffer from.
+
+```{r}
+# Calculate age from date of birth
+persons$`Created at` <-  as.Date(persons$`Created at`)
+persons$age <- year(persons$`Created at`) - year(persons$DOB)
+
+# Adjust age for leap year cases
+persons$age <- ifelse(month(persons$DOB) > month(persons$`Created at`) | (month(persons$DOB) == month(persons$`Created at`) & day(persons$DOB) > day(persons$`Created at`)),   persons$age -1, persons$age)
+
+# Descriptive statistics for age
+summary(persons$age)      # Summary statistics
+sd(persons$age)           # Standard deviation
+```
+In the data provided to us by Joanna, she warns us about some questionable variants that are colored in "yellow" in the excel sheet. As we are not very confident about them, we would like to check for any specific association or trends that these samples exhibit. If not, it would be ideal to set the variant status as 'missing' for the samples having these variants as we do not trust them. So, to check that, we will add another column to our persons data frame. This column corresponds to the sample indexes that contain a questionable variant.
+
+```{r}
+#Questionable variants
+persons$'Questionable Variant' <- ifelse(
+ persons$SampleNumber%in% c(120, 182, 15, 96, 236, 131, 128, 182, 17, 137, 48),
+  "yes",
+  "no"
+)
+```
+
+# 3. Univariate Summaries
+
+After adding the necessary details,we move to the next step of exploring the data. We will start by looking at the univariate summaries.
+i.e. we will create a table summarizing all the unique values along with their counts. These uni-variate summaries would let us have an overview of the data and direct us towards the type of analysis that we could potentially perform on our data.
+
+## 3.1 Sample Index 
+We will start by looking at the sample index column.
+
+```{r}
+  summary_SampleIndex <- persons %>%
+    group_by(SampleIndex) %>%
+    summarise(count = n())
+ print(summary_SampleIndex)
+```
+We see that we have 15 different sample indexes with the frequency of each one of them as stated in the table.
+ALS(93), which has been categorized as ND has the most frequent occurrence in the list followed by SY(58) and NP(52) that are NON-ND and undetermined respectively.
+
+## 3.2 Sex
+We will similarly look at the univariate summary table for the sex.
+
+```{r}
+summary_Sex <- persons %>% 
+  group_by(Sex) %>% 
+  summarise(count= n())
+print(summary_Sex)
+```
+The table comparing the two sex tells us that we have 177 females and 181 males in the study. This ensures that we have a fair representation of both the genders.
+
+```{r}
+summary_Sex_q  <- persons %>% filter(`Questionable Variant`=="yes") %>%
+  group_by(Sex) %>% 
+  summarise(count= n())
+print(summary_Sex_q)
+```
+
+## 3.3 ND Status 
+Let's now see the distribution of the total persons based on the classification of the disease i.e. how many of them have a disease that is ND and how many of them have a disease that is Non-ND.
+
+```{r}
+summary_ND <- persons %>% 
+  group_by(ND) %>% 
+  summarise(count= n())
+print(summary_ND)
+```
+
+On looking at the uni-variate distribution of the ND column, we see that in our study  168 people are having a disease that is non-neuro degenerative while 134 people have a neuro degenerative disease. A total of 56 subjects have a disease that is yet not classified as ND or Non-ND because of overlapping symptoms.
+
+Let us now try to look at the ND status for the questionable variants-
+
+```{r}
+summary_ND_q <- persons %>% filter(`Questionable Variant`=="yes") %>%
+  group_by(ND) %>% 
+  summarise(count= n())
+print(summary_ND_q)
+```
+So,the questionable variants give rise to both ND and non-ND diseases.
+
+##3.4 Enrichment Kits
+Univaraite summary for the enrichment kits-
+
+```{r}
+persons$`Enrichment kits` <- factor(persons$`Enrichment kits`, levels = c("Twist Comprehensive Exome Refseq vs2", "SureSelect All Exon v7",	
+"Twist Comprehensive Exome plus Refseq",	
+ "Twist Comprehensive Exome plus Refseq, Twist Exome 2.0, Twist Mix (Comprehensive plus 2.0)", "Twist Mix (Comprehensive plus 2.0)"	
+), labels = c("TCER vs2", "Exon v7","TCE(RefSeq)","TCE(R,Ex,Mix)", "T Mix"))
+
+```
+```{r}
+E_kits <- persons %>% 
+  group_by(`Enrichment kits`) %>% 
+  summarise(count= n())
+print(E_kits)
+```
+
+There are 5 different kinds of enrichment kits being used where 'Twist Comprehensive Exome Refseq vs2' is the one that is the most frequent (240 times). 
+
+## 3.5 Clinical Info
+Moving to our next variable of Clinical Information, it is a little difficult to look at it if we summarize it based on the different types of clinical information available about the disease, given the number of different values. So, we will group all the entries together under ``Others'' if they occur less than 3 times.
+
+```{r}
+ClinicalInfo<- persons %>%
+  group_by(`Clinical information`) %>%
+  summarise(count = n())
+
+#Merge rows with value <= 3 in the 'count' column.
+merged_row <- ClinicalInfo%>%
+  filter(count <= 3) %>%
+  summarise(column1 = "others",
+            column2 = n())
+colnames(merged_row) <- colnames(ClinicalInfo)
+
+# Remove rows with value <= 3 in the count column.
+filtered_data <-ClinicalInfo %>%
+  filter(count > 3)
+
+# Combine the filtered data with the merged row
+ClinicalInfo <- rbind(filtered_data, merged_row)
+names(ClinicalInfo) <- c("Info", "count")
+ClinicalInfo$Label <- str_extract(ClinicalInfo$Info, "\\w+")
+
+# Print the final merged table
+print(ClinicalInfo)
+```
+So, we see that there are 9 different unique 'Clinical Information' available about the patients that occur more than 3 times. All the other information have been grouped under the row 'Others'. 
+We notice that the most frequent occurrence is of Amyotrophic lateral sclerosis(74 times). All the others have a frequency of 5 or less.
+
+Here, note that, we have a category of "trio parents" that is just the data of some families that were considered during the data collection as Joanna mentions. We can, (on a later stage) choose and decide if we want to consider these families in our control group or not.
+
+# 4. Histogram of Age distribution
+
+Let us now look at how the age of our sampled individuals is distributed. For this, we will plot a histogram of the ages of the persons.
+
+```{r}
+hist(persons$age, breaks = 10, col = "lightblue", main = "Histogram of the age of the sampled persons", xlab = "Age", ylab = "Frequency")
+```
+
+From the histogram we can see that the majority of persons sampled were from the age group 50-60 years followed by the 60-70 age group.
+Going a step further, we will later look at the distribution of age based on gender or the disease being ND or Non-ND to see if there is a particular trend in the age distribution.
+
+# 5. Bivariate Summaries (Categorical X Categorical Variables)
+
+Now that we have analyzed the uni variate summaries for our different variables, let's see the trends and relationships (if any) between the different variables. We can start looking at it by the bivariate summaries using contingency tables to summarize the associated counts.
+We can then use tests like, fisher's exact test/ permutation test/ chi-square test based on the data to analyze if the different variables are independent or not.
+We will also see if there are any confounding variables and adjust for them before moving to the next step.
+
+Let us start by looking at the Sample Index and the sex of the the sampled individuals.
+
+```{r}
+contingency_table_1 <- table(persons$SampleIndex, persons$Sex)
+print(contingency_table_1)
+#Test for association
+result_1 <- fisher.test(contingency_table_1, simulate.p.value = TRUE, B = 10000)
+print(result_1)
+p_value_1 <- result_1$p.value
+print(p_value_1)
+```
+The table helps us see how the different sample indexes are distributed among the two genders. We see that since the p-value is relatively large (greater than the commonly used significance level of 0.05), we do not have sufficient evidence to reject the null hypothesis of independence. This means that there is no strong evidence to suggest that there is a relationship between the Sample Index and the gender of the patient based on the data.
+
+Hence, we can assure that the gender of a person does not play any significant role in determining the type of disease they suffer from.
+
+Going further, let us look at the Sample Index and the Enrichment kits used.
+
+```{r}
+contingency_table_2 <- table(persons$SampleIndex, persons$`Enrichment kits`)
+print(contingency_table_2)
+#Test of association
+result_2 <- fisher.test(contingency_table_2, simulate.p.value = TRUE, B = 10000)
+p_value_2 <- result_2$p.value
+print(p_value_2)
+```
+This is quite interesting result. As we obtain such a small p value, it implies that there is a significant relationship between the Sample Index and Enrichment kits being used.
+One possible explanation could be the fact that the persons were sampled in different labs and that a particular lab useed a particular type of enrichment kit.
+
+```{r}
+contingency_table_3 <- table(persons$SampleIndex, persons$ND)
+print(contingency_table_3)
+result_3 <- fisher.test(contingency_table_3, simulate.p.value = TRUE, B = 10000)
+p_value_3 <- result_3$p.value
+print(p_value_3)
+```
+On applying the exact permutational test, the obtained p value i.e. (9.999e-05 or 0.00009999) shows us that there is strong evidence to suggest that there is a significant relationship between the Sample Index and the ND status variable for our given data. 
+This is also an intuitive interpretation given that the sample Index has been decided in order to represent the disease and the disease in turn is either ND or Non-ND.
+
+## Sample index~ Variant
+```{r}
+contingency_table_4<- table(persons$SampleIndex, persons$Variant)
+print(contingency_table_4)
+result <- fisher.test(contingency_table_4, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+A p value of 0.0146 tells us that there is a significant relationship between the Sample index and the presence or absence of a variant.
+
+## Sample Index ~ Questionable Variant
+
+```{r}
+contingency_table_5 <- table(persons$SampleIndex, persons$`Questionable Variant`)
+print(contingency_table_5)
+result <- fisher.test(contingency_table_5, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+A large p value of 0.21 tells us that Sample Index and Questionable variants do not have a relationship.
+
+## ND Status~Sex
+```{r}
+contingency_table_6<- table(persons$ND, persons$Sex)
+print(contingency_table_6)
+```
+This contingency table for gender and the ND status helps us see how the ND and Non-Nd diseases are distributed over the two gender. Let us now perform a chi square test to check if these are independent or not.
+
+```{r}
+result <- chisq.test(contingency_table_6)
+print(result)
+```
+The test statistic, is 2.36 As we know that this value represents the discrepancy between the observed frequencies in the contingency table and the frequencies that would be expected under the assumption of independence between the variables.
+Also, we see that in this case, we obtain a p-value of 0.30,  this value is quite high and we can say that we do not have sufficient evidence to reject the null hypothesis of independence or in other words we can say that we do not have significant evidence to conclude that there is a relationship between the gender of a person and the ND status of a disease.
+
+## ND Status~ E_Kits
+```{r}
+contingency_table_7 <- table(persons$ND, persons$`Enrichment kits`)
+print(contingency_table_7)
+result <- fisher.test(contingency_table_7, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+The p-value (0.01) indicates a significant association between the enrichment kits used and the ND status of the disease. We can think about this association, directing us towards thinking if there were a particular type of enrichment kit used in a certain lab and the sampled individuals had a certain type of diagnosis.
+
+## ND Status~Variant
+
+Let us check the association of the ND status with the presence or absence of a variant-
+```{r}
+contingency_table_8 <- table(persons$ND, persons$Variant)
+print(contingency_table_8)
+result <- fisher.test(contingency_table_8, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+This p value tells us that there is a relationship between the ND status and the presence or absence of a variant.
+
+## ND Status~ Questionable Variant
+
+```{r}
+contingency_table_9 <- table(persons$ND, persons$`Questionable Variant`)
+print(contingency_table_9)
+result <- fisher.test(contingency_table_9, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+Clearly, such big p value tells us that there is not any relationship between the ND status of a variant and it being questionable.
+
+## Sex ~Ekits
+Let us now create a table contrasting the gender with the enrichment kits used.
+
+```{r}
+contingency_table_10 <- table(persons$Sex, persons$`Enrichment kits`)
+print(contingency_table_10)
+result <- fisher.test(contingency_table_10, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+
+Since the permutation p-value (0.950405) is greater than the conventional significance level of 0.05, we do not have sufficient evidence to reject the null hypothesis. The null hypothesis typically states that there is no significant difference between the group means. In this case, we obtain a high p-value and we can say that we do not have sufficient evidence to reject the null hypothesis of independence or in other words we can say that we do not have significant evidence to conclude that there is a relationship between the gender of a person and the enrichment kits.
+
+## Sex~Variant
+```{r}
+contingency_table_11 <- table(persons$Sex, persons$Variant)
+print(contingency_table_11)
+result <- fisher.test(contingency_table_11, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+We can see that sex and presence or absence of a variant are independent of each other.
+
+## Sex~Questionable
+```{r}
+contingency_table_12 <- table(persons$Sex, persons$`Questionable Variant`)
+print(contingency_table_12)
+result <- fisher.test(contingency_table_12, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+We can see that sex and the questionable variants are independent of each other.
+
+## Enrichment kits~ Presence or absence of a variant
+
+```{r}
+contingency_table_13 <- table(persons$Variant, persons$`Enrichment kits`)
+print(contingency_table_13)
+result <- fisher.test(contingency_table_13, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+
+## Enrichment kits ~ Questionable
+```{r}
+
+contingency_table_14 <- table(persons$'Questionable Variant', persons$`Enrichment kits`)
+print(contingency_table_14)
+```
+
+So, we can say that the questionable variants do not really have any association with the enrichment kits being used.
+
+```{r}
+result <- fisher.test(contingency_table_14, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+## Presence or absence of variant and questionable variants
+```{r}
+contingency_table_15 <- table(persons$'Questionable Variant', persons$Variant)
+print(contingency_table_15)
+result_7 <- chisq.test(contingency_table_15)
+print(result_7)
+result <- fisher.test(contingency_table_15, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+
+# 6. Bivariate summaries involving age. (Age X Categorical Variables)
+
+Let us now visualize the distribution of age by different variables and see if we can derive some insights from it.
+We will start by plotting the sample index with the age to see how is the age distributed about the various different sample indices.
+
+```{r}
+ggplot(persons, aes(x = SampleIndex, y = age, fill = SampleIndex)) +
+  geom_boxplot(color = "black", outlier.shape = NA, varwidth = TRUE, alpha=0.2) +  labs(x = "SampleIndex", y = "Age") +
+  ggtitle("Distribution of Age by Sample Index") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+The above plot does not convey a lot of information other than patients with some
+conditions (e.g. HL and SY) tend to be younger. 
+
+Let us now look at the distribution of age by sex.
+
+```{r}
+ggplot(persons, aes(x =Sex, y = age, fill=Sex)) +
+  geom_boxplot(color = "black", outlier.shape = NA, varwidth = TRUE, alpha=0.2) +
+  labs(x = "Sex", y = "Age") +
+  ggtitle("Distribution of Age by Sex")
+```
+As is evident from the plot, a similar number of males and females were sampled and the average age of the males is a bit higher than the average age of females.
+
+Going further, let us look at the distribution of age by the ND status of a disease
+```{r}
+#Age by ND status
+ggplot(persons, aes(x =ND, y = age , fill=ND)) +
+  geom_boxplot(color = "black", outlier.shape = NA ,varwidth = TRUE, alpha=0.2) +  labs(x = "ND or not", y = "Age") +
+  ggtitle("Distribution of Age by ND status")
+```
+The plot suggests that the people who had a neuro-degenerative disease tend to be in the higher age group. In particular, people above the age of 40 years appear to be more susceptible to ND diseases. Later, we will verify this with a bootstrap test on our data.
+
+
+Looking ahead to the model fitting, let's use a loess data smoother (implemented in the `gam` package) to explore how the probability of ND varies as a function of age. This will help us to see if a linear adjustment for age in the logistic regression modeling will suffice.
+
+```{r}
+
+ newND<-(persons$ND=="Yes"|persons$ND=="Maybe")
+ library(gam)
+gamobj<-gam(newND~lo(age, span=1/3),family=binomial, data=persons)
+ #In the above, smooth with a window of 1/3 of the data (the default is 1/2).
+
+plot(gamobj, se=T) 
+#linear looks fine (a straight line can fit between the 1-se error bars)
+```
+
+
+Now, let us move one step ahead and plot the age in relation to both ND status and the gender of the person.
+
+```{r}
+#Age by ND status & gender
+ggplot(persons, aes(x =ND, y = age , fill=Sex)) +
+  geom_boxplot(color = "black", outlier.shape = NA ,varwidth = TRUE, alpha=0.2) +  labs(x = "ND or not", y = "Age") +
+  ggtitle("Distribution of Age by ND status & Sex")
+```
+
+Here again, we see the same trend that people with a ND disease have a higher average age than those with non-ND disease. Plotting the two genders, we can see that the average age for males and females is quite similar for the case of a ND disease but for a non-ND disease, males have slightly lesser average age than females.
+ A bootstrap test on this also would be of great help to see if the gender is associated with the ND status. It would help us look at the real confounding variables so that we can adjust for them beforehand in order to be confident with our results.
+ 
+Now, let us look at the distribution  of age by the E kits used.
+
+```{r}
+#Age by enrichment_kits
+ggplot(persons, aes(x =`Enrichment kits`, y = age, fill=`Enrichment kits`)) + geom_boxplot(color = "black", outlier.shape = NA, varwidth = TRUE, alpha=0.2) +
+  labs(x = "Enrichment Kits", y = "Age") +
+  ggtitle("Distribution of Age by Enrichment kits used") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+We can see here that the R vs2 kit was the most frequently used and the age doesn't really determine the type of enrichment kit being used. 
+
+
+ 
+```{r}
+#Presence or absence of variable with age
+ggplot(persons, aes(x =Variant, y = age , fill=Variant)) +
+  geom_boxplot(color = "black", outlier.shape = NA ,varwidth = TRUE, alpha=0.2) +  labs(x = "Variant", y = "Age") +
+  ggtitle("Distribution of Age by presence or absence of variant")
+```
+
+ 
+```{r}
+#Questionable variable with age
+ggplot(persons, aes(x =`Questionable Variant`, y = age , fill=`Questionable Variant`)) +
+  geom_boxplot(color = "black", outlier.shape = NA ,varwidth = TRUE, alpha=0.2) +  labs(x = " Questionable Variant", y = "Age") +
+  ggtitle("Distribution of Age by presence ir absence of variant")
+```
+# 7. Bootstrap code to test the association between variables.
+
+Let us now write a generic bootstrap code to test the association between a continuous variable such as age and categorical variables such as ND status and clinical information.
+We start by defining two functions, calc_f for calculating the F statistic and bsF for performing the bootstrap F-test.
+```{r}
+bsF <- function(cts,cat,B) {
+  obs_stat <- calc_f(cts,cat) # calc_f is my own function defined below
+  resids <- residuals(aov(cts~cat))
+  # Perform bootstrap iterations
+  resids_dat <- data.frame(resids=resids,cat=cat)
+  bootstrap_stats <- replicate(B, {
+    bs_data <- resids_dat %>%
+      group_by(cat) %>%
+      sample_n(size = n(), replace = TRUE) %>%
+      ungroup()
+    calc_f(bs_data$resids,bs_data$cat)
+  })
+  return(mean(bootstrap_stats >= obs_stat))
+}
+
+calc_f <- function(cts,cat) {
+  fit <- aov(cts~cat) #Use R's built-in anova function to get f-stat
+  fit_sum <- summary(fit)
+  F_stat <- fit_sum[[1]]$`F value`[1] #Extract the f-stat value
+  return(F_stat)
+}
+
+```
+## 7.1 Age~ ND Status
+Let's try out the bootstrap F test function to test whether age and ND status are associated.
+
+```{r}
+B= 1000
+bsF(persons$age,persons$ND,B)
+```
+
+We can see that they are, backing up the strong visual impression we get from the box plots!
+
+## 7.2 Age~ Clinical Information
+Let us now use our bootstrap code to test the association between age and clinical information  
+```{r}
+
+bsF(persons$age,persons$`Clinical information`,B)
+
+```
+This extremely low p-value (0) suggests that the observed differences in age across categories of clinical information are clearly unlikely to have occurred by random chance alone. Therefore, it can be concluded that there is a significant association between age and the clinical information variable, indicating that age varies systematically across the different clinical information.
+
+## 7.3 Sex~age
+```{r}
+bsF(persons$age , persons$Sex,B)
+```
+
+This large value exactly resonates with the results that the boxplot was giving us i.e. the data does not provide strong evidence to conclude that age varies significantly based on gender. The high p-value indicates that any observed differences in age across gender categories are likely due to random chance rather than a systematic effect of gender. Therefore, based on the results of the 1000 bootstrap sampling, it is reasonable to conclude that age and gender are not strongly associated in the data.
+We can say that any differences in age between male and female individuals may not be meaningful from a statistical standpoint.
+
+## 7.4 Variant~ age
+```{r}
+bsF(persons$age,persons$Variant,B)
+```
+
+## 7.5 Enrichment kits~ age
+```{r}
+bsF(persons$age, persons$`Enrichment kits`,B)
+```
+## 7.6 Questionable Variant ~ age
+
+```{r}
+
+bsF(persons$age,persons$`Questionable Variant`,B)
+```
+We can see from the above plot that there is a large majority of patients of ALS, which is ND disease. An interesting finding here is about the two sample indexes DIV and DYT. Here, half of the times, the two indexes are classified as non-ND but the other half of the times, we see that due to some overlapping characteristics with the ND disease, we are unable to classify them and hence they come under the 'Maybe' category.
+
+
+# 8. Variants Data File- Exploratory Analysis
+
+Now read in the data from Joanna's excel file `ATXN2variants.xlsx`.
+First let's look at the names of the sheets in this excel file
+```{r}
+excel_sheets("../ATXN2variants.xlsx")
+```
+
+The name of the sheet with the data is `Sheet1`, so let's read it into R.
+```{r}
+variants<-read_excel("../ATXN2variants.xlsx", sheet="Sheet1")
+View(variants)
+```
+Adding a new column to our data frame to classify the entries in yellow. As we mention that according to Joanna, these are Questionable variants and might be faulty to use them. So, we create a new column named <Questionable variant>.
+```{r}
+variants$'Questionable variant' <- ifelse(
+ variants$SampleNumber%in% c(120, 182, 15, 96, 236, 120, 131, 128, 182, 17, 137, 48),
+  "yes",
+  "no"
+)
+```
+
+On the same lines, the way we did uni variate summaries for the variables in the persons file, we will now do similar analysis for the variants file.
+Lets look at the different types of variants using the func. column. 
+
+```{r}
+Func <- variants%>%
+  group_by(`Func`) %>%
+  summarise(count = n())
+print(Func)
+```
+As Joanna mentions that there are 5 types which could potentially be used as variable in place of the actual cDNA variant (i.e. instead of checking for enrichment of each variant we could check for enrichment of variants of specific type).
+The most frequent one is 'frameshift_variant' appearing 18 times.
+
+Moving forward,if we want to look at the LocalFound variable, a simple univariate summary won't give us a lot of insight as LocalFound is already a count in itself i.e. the number of times the variant was found in the local database, hence, we will look at the two columns(cDNA- that tells us about the different variants and the corresponding LocalFound)
+
+```{r}
+# Extract the two columns cDNA and LocalFound
+LocalFound <- variants[, c("cDNA", "LocalFound")]
+
+# Keeping only the unique values
+unique_cDNA <- unique(LocalFound)
+print(unique_cDNA) 
+unique_cDNA <- unique_cDNA %>%
+  arrange(LocalFound) %>% filter(LocalFound >1)
+print(unique_cDNA) 
+```
+
+We can see that here, we have 19 different variants. This also helps us verify that our initial consideration that we have 19 different variants has been cross verifies.
+The arrangement shows us that the most frequent variants is "c.71_72insACAGCAGCAGCA" that was found 13 times and "c.60del" that was found 11 times in the local database.
+
+## 9. Joint Exploratory Analysis
+
+```{r}
+persons_with_var <- persons %>%
+  filter(`ATXN2ex1 variant1` != "neg" | `ATXN2ex1 variant2` != "neg")
+```
+We can see that, out of the total 358 samples persons, there were 37 who had a variant.
+
+Let us see if the information in the "cDNA" column of the variants file  match the information in the "ATXN2ex1 variant1" and  "ATXN2ex1 variant2" columns of the persons file for these persons who had a variant.
+
+For this, we have the new data framed named persons_with_var, this df eliminates all the entries of the persons df that do not have any variant i.e. the entry in both ATXN2ex1 var1 and ATXN2ex1 var2 are negative.
+
+Now that we have this df of persons with variants. For each row, we will see the corresponding entry in the variants data frame that has the same SampleIndex and same Sample  Number. We will then compare the variant that they have to the cDNA column in the corresponding row of the variants data file.
+```{r}
+# Loop through each row in persons
+for (i in 1:nrow(persons_with_var)) {
+  row1 <- persons_with_var[i, ]
+  # Loop through each row in variants
+  for (j in 1:nrow(variants)) {
+    row2 <- variants[j, ]
+    
+    # Check if the values of SampleIndex and SamleNumber match
+    if (row1$SampleIndex == row2$SampleIndex && row1$SampleNumber == row2$SampleNumber) {
+      #When the entry matches (i.e. the person is the same), we check if the entry in the ATXN2ex1 variant column of the persons df matches the cDNA entry in the variants df.
+      if (row1$`ATXN2ex1 variant1` == row2$cDNA) {
+        # If cDNA matches variant, store the match in a new row in the persons df.
+    persons_with_var$Match = "True"
+      }
+    }
+  }
+}
+
+View(persons_with_var)
+```
+
+We can clearly see in the newly added column that for each row the entry in the Match column comes out to be true. 
+With this test, we can be assured that there in no discrepancy in the information of variants in the two excel file. The entries are the same for the two files.
+
+As Joanna mentions, we had some questionable variants(the variable indicating the samples highlighted in yellow in the variants file). When we started looking at the excel file and imported the data, we created a new column in our data set for all the samples that contained any of these questionable variants, the column was named as <Questionable Variant>. 
+
+
+Let us try to summarize the variants and see if we have any trend.
+
+```{r}
+variants %>% filter(`Questionable variant`=="yes") %>% group_by(cDNA) %>%  count(cDNA)
+  
+```
+So, here we see that all the questionable variants have one one of these 3 cDNAs-
+c.39_40del, c.42del, c.80_85del
+
+
+Now, lets create our new data with all the unique cDNAs.
+
+```{r}
+variants_new = left_join(variants, persons, by= "SampleIndex") %>%
+  distinct(SampleIndex, ND)
+variants_new = merge(variants, variants_new, by = "SampleIndex")
+
+variants_new <- variants_new %>%
+  select(-c(SampleIndex, SampleNumber)) %>%
+  select(cDNA, everything())
+variants_new <-variants_new %>%
+  distinct(cDNA, .keep_all = TRUE)
+View(variants_new)
+print(variants_new)
+```
+
+We will start by summarizing the func variable.
+
+```{r}
+func <- variants_new %>%
+  group_by(Func) %>%
+  summarize(UniqueVariantsCount = n_distinct(cDNA))
+print(func)
+```
+Of the 19 variants, we can see the distribution over the func variable where 7 of them have 'disruptive_inframe_insertion, direct_tandem_duplication' followed by 4 of them having 'disruptive_inframe_deletion' and 'frameshift_truncation' respectively.
+
+```{r}
+contingency_table_v1<- table(variants_new$cDNA,variants_new$ND)
+print(contingency_table_v1)
+```
+Jotting this table gives us some important insights like -
+1. The variants <c.57_59del> and <c.54_58del> giving rise to a type of disease where we can not identify if it is ND or Non-ND because of some overlapping characteristics.
+2. Out of the 19 variants, 15 of them give rise to a disease that is ND.
+
+```{r}
+result <- fisher.test(contingency_table_v1, simulate.p.value = TRUE, B = 10000)
+p_value <- result$p.value
+print(p_value)
+```
+
+To look at the ND status of the questionable variants, lets see the contingency table with ND status of these variants. 
+
+```{r}
+subset_data <- variants_new[variants_new$`Questionable variant` == "yes", ]
+contingency_table_v2 <- table(subset_data$cDNA, subset_data$ND)
+print(contingency_table_v2)
+rm(subset_data)
+```
+So, we see that all these 3 variants give rise to a disease that is ND.
+
+## Modifying and updating the persons and the variants data frames to make them fit for our analysis.
+
+Let us first update our "persons" data file to use for our further analysis. For this, we will add new columns to our data frame.Here, the additional columns would be each of the different variants detected.
+
+For this, let us first verify if any variant is appearing twice in any person or not
+
+```{r}
+duplicate_rows <- persons %>% filter(`ATXN2ex1 variant1` == `ATXN2ex1 variant2` & `ATXN2ex1 variant1` != "neg")
+rm(duplicate_rows)
+```
+We can see that there is no data in this table. Hence, we can be assured that there is no such person for which the same variant is detected twice.
+
+```{r}
+#Create the new variants data frame.
+variants_new <- variants %>%
+  select(3:13) %>%
+  filter(!duplicated(`cDNA`)) %>%
+  arrange(`cDNA`) %>%
+  select(`cDNA`, everything())
+```
